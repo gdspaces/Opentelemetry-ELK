@@ -1,0 +1,212 @@
+version: '3.7'
+
+services:
+  # Zookeeper
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    ports:
+      - "2181:2181"
+
+  # Kafka
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    environment:
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    ports:
+      - "9092:9092"
+    depends_on:
+      - zookeeper
+
+  # Provectus Kafka UI for viewing Kafka topics
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: "local"
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "kafka:9092"
+      KAFKA_CLUSTERS_0_ZOOKEEPER: "zookeeper:2181"
+    depends_on:
+      - kafka
+
+  collector1:
+    image: jaegertracing/jaeger-collector:latest
+    command: [
+      "--kafka.producer.brokers=kafka:9092",
+      "--kafka.producer.topic=jaeger-spans",
+      "--log-level=debug",
+      "--metrics-backend=prometheus",
+    ]
+    ports:
+      - "14268:14268" # HTTP for spans
+      - "14250:14250" # gRPC for OTel
+      - "4317:4317" 
+    environment:
+      SPAN_STORAGE_TYPE: "kafka"
+      METRICS_STORAGE_TYPE: "prometheus"
+    depends_on:
+      - kafka
+
+
+  cassandra:
+    hostname: cassandra
+    image: cassandra
+    environment:
+      MAX_HEAP_SIZE: 1G
+      HEAP_NEWSIZE: 256M
+    ports:
+     - "9042:9042"
+
+  cassandra-schema:
+    image: jaegertracing/jaeger-cassandra-schema
+    depends_on:
+      - cassandra
+      
+    # Grafana
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: "admin"
+    volumes:
+      - grafana-storage:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      
+      
+  ingester1:
+    image: jaegertracing/jaeger-ingester
+    command: [
+      "--kafka.consumer.brokers=kafka:9092",
+      "--kafka.consumer.topic=jaeger-spans",
+      "--kafka.consumer.group-id=jaeger-ingester",
+      "--log-level=debug",
+    ]
+    ports:
+      - "14270:14270" # admin port: health check at / and metrics at /metrics
+    environment:
+      LOG_LEVEL: debug
+      INGESTER_PARALLELISM: 1
+      INGESTER_DEADLOCKINTERVAL: ms
+      SPAN_STORAGE_TYPE: cassandra
+      CASSANDRA_SERVERS: cassandra
+      CASSANDRA_KEYSPACE: jaeger_v1_dc1
+      KAFKA_CONSUMER_BROKERS: kafka:9092
+      KAFKA_CONSUMER_TOPIC: jaeger-spans
+    depends_on:
+      - kafka
+      - cassandra
+      
+  jaeger-query:
+    image: jaegertracing/jaeger-query:latest
+    ports:
+      - "16686:16686"
+      - "16687:16687"
+    depends_on:
+      - cassandra-schema
+    environment:
+      LOG_LEVEL: debug
+      SPAN_STORAGE_TYPE: cassandra
+      CASSANDRA_SERVERS: cassandra
+      CASSANDRA_KEYSPACE: jaeger_v1_dc1
+      JAEGER_ENDPOINT: http://jaeger-collector:14268/api/traces
+      
+  prometheus:
+    image: quay.io/prometheus/prometheus:v2.43.0
+    container_name: prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command:
+      - --web.console.templates=/etc/prometheus/consoles
+      - --web.console.libraries=/etc/prometheus/console_libraries
+      - --storage.tsdb.retention.time=1h
+      - --config.file=/etc/prometheus/prometheus-config.yaml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+      - --web.route-prefix=/
+      - --enable-feature=exemplar-storage
+    volumes:
+      - ./prometheus/prometheus-config.yaml:/etc/prometheus/prometheus-config.yaml
+    deploy:
+      resources:
+        limits:
+          memory: 300M
+    ports:
+      - "9090:9090"
+ 
+  elasticsearch:
+    image: elasticsearch:7.9.1
+    container_name: elasticsearch
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    volumes:
+      - test_data:/usr/share/elasticsearch/data/
+      - ./elk-config/elasticsearch/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml
+    environment:
+      - discovery.type=single-node
+      - http.host=0.0.0.0
+      - transport.host=0.0.0.0
+      - xpack.security.enabled=false
+      - xpack.monitoring.enabled=false
+      - cluster.name=elasticsearch
+      - bootstrap.memory_lock=true
+
+  logstash:
+    image: logstash:7.9.1
+    container_name: logstash
+    ports:
+      - "5044:5044"
+      - "9600:9600"
+    volumes:
+      - ./elk-config/logstash/logstash.conf:/usr/share/logstash/pipeline/logstash.conf
+      - ./elk-config/logstash/logstash.yml:/usr/share/logstash/config/logstash.yml
+      - ls_data:/usr/share/logstash/data
+    depends_on:
+      - elasticsearch
+
+  kibana:
+    image: kibana:7.9.1
+    container_name: kibana
+    ports:
+      - "5601:5601"
+    volumes:
+      - ./elk-config/kibana/kibana.yml:/usr/share/kibana/config/kibana.yml
+      - kb_data:/usr/share/kibana/data
+    depends_on:
+      - elasticsearch
+      
+  apm-server:
+    image: docker.elastic.co/apm/apm-server:7.17.3
+    ports:
+      - '8200:8200'
+      - '1514:1514/udp'
+    environment:
+      - output.elasticsearch.hosts=["http://elasticsearch:9200"]
+      - apm-server.host=apm-server:8200
+      - apm-server.frontend.enabled=true
+      - apm-server.frontend.allow_origins="*"
+      - apm-server.rum.enabled=true
+      - output.elasticsearch.enabled=true
+      - setup.kibana.host=kibana:5601
+      - setup.template.settings.index.number_of_replicas=0
+      - apm-server.kibana.enabled=true
+      - apm-server.kibana.host=kibana:5601
+    depends_on:
+      - elasticsearch 
+
+
+volumes:
+  grafana-storage:
+  opensearch-data1:
+  opensearch-data2:
+  test_data:
+  ls_data:
+  kb_data:

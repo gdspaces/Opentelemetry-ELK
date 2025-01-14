@@ -1,0 +1,23 @@
+scrape_configs:
+  - job_name: 'opentelemetry'
+    static_configs:
+      - targets:
+          - 'host.docker.internal:8889'
+        labels:
+          env: 'staging'
+          instance: 'Server'
+      - targets:
+          - 'host.docker.internal:9464'
+        labels:
+          env: 'staging'
+          instance: 'DeliveryService'
+      - targets:
+          - 'host.docker.internal:9465'
+        labels:
+          env: 'staging'
+          instance: 'InventoryService'
+      - targets:
+          - 'host.docker.internal:9466'
+        labels:
+          env: 'staging'
+          instance: 'OrderService'

@@ -1,0 +1,23 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:4317"
+      http:
+        endpoint: "0.0.0.0:55681"
+
+exporters:
+  otlp/jaeger:
+    endpoint: "jaeger-collector:14250"
+    tls:
+      insecure: true  # Disable TLS verification for local setup
+  otlp/elastic: 
+    endpoint: apm-server:8200
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlp/jaeger,otlp/elastic]
