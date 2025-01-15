@@ -95,9 +95,8 @@ services:
       LOG_LEVEL: debug
       INGESTER_PARALLELISM: 1
       INGESTER_DEADLOCKINTERVAL: ms
-      SPAN_STORAGE_TYPE: cassandra
-      CASSANDRA_SERVERS: cassandra
-      CASSANDRA_KEYSPACE: jaeger_v1_dc1
+      SPAN_STORAGE_TYPE: elasticsearch
+      ES_SERVER_URLS: "http://elasticsearch:9200"
       KAFKA_CONSUMER_BROKERS: kafka:9092
       KAFKA_CONSUMER_TOPIC: jaeger-spans
     depends_on:
@@ -110,12 +109,11 @@ services:
       - "16686:16686"
       - "16687:16687"
     depends_on:
-      - cassandra-schema
+      - elasticsearch
     environment:
       LOG_LEVEL: debug
-      SPAN_STORAGE_TYPE: cassandra
-      CASSANDRA_SERVERS: cassandra
-      CASSANDRA_KEYSPACE: jaeger_v1_dc1
+      SPAN_STORAGE_TYPE: elasticsearch
+      ES_SERVER_URLS: "http://elasticsearch:9200"
       JAEGER_ENDPOINT: http://jaeger-collector:14268/api/traces
       
   prometheus:
@@ -199,6 +197,7 @@ services:
       - setup.template.settings.index.number_of_replicas=0
       - apm-server.kibana.enabled=true
       - apm-server.kibana.host=kibana:5601
+      - apm-server.auth.secret_token:"devoops!"
     depends_on:
       - elasticsearch 
 
